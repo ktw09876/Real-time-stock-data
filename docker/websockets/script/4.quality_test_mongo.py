@@ -2,6 +2,7 @@
 import os
 import sys
 import logging
+import json # JSON 파싱을 위해 import
 from datetime import datetime, timezone, timedelta
 from pymongo import MongoClient
 from bson.objectid import ObjectId
@@ -22,8 +23,6 @@ class MongoDataValidator:
         self.mongo_client = MongoClient(host=self.mongo_host, port=self.mongo_port)
         self.db = self.mongo_client[self.mongo_db_name]
         self.collection = self.db[self.collection_name]
-        
-        self.logger.info("MongoDB 연결 설정 완료.")
 
     def _setup_logging(self, target_date_str: str):
         """로거를 설정하여 콘솔과 파일에 모두 출력되도록 합니다."""
@@ -42,7 +41,7 @@ class MongoDataValidator:
         log_dir = os.getenv('LOG_PATH', '.')
         os.makedirs(log_dir, exist_ok=True)
         
-        log_file_name = f"mongo_validation_{target_date_str}.log"
+        log_file_name = f"test_mongo_{target_date_str}.log"
         log_file_path = os.path.join(log_dir, log_file_name)
         
         file_handler = logging.FileHandler(log_file_path)
@@ -78,46 +77,71 @@ class MongoDataValidator:
             start_dt_utc = start_dt_kst.astimezone(timezone.utc)
             end_dt_utc = end_dt_kst.astimezone(timezone.utc)
 
+            # 파이프라인에서 JSON 파싱 단계를 제거하고, 필요한 모든 데이터를 가져옵니다.
             pipeline = [
                 {'$match': {'insert_time': {'$gte': start_dt_utc, '$lt': end_dt_utc}}},
                 {
-                    # 1. 필요한 필드를 추출하고 안전하게 타입 변환
                     '$project': {
-                        'payload': 1, 'insert_date': 1,
-                        'price': {'$convert': {'input': '$payload.stck_prpr', 'to': 'double', 'onError': None, 'onNull': None}},
-                        'volume': {'$convert': {'input': '$payload.cntg_vol', 'to': 'long', 'onError': None, 'onNull': None}},
-                        'high_price': {'$convert': {'input': '$payload.stck_hgpr', 'to': 'double', 'onError': None, 'onNull': None}},
-                        'low_price': {'$convert': {'input': '$payload.stck_lwpr', 'to': 'double', 'onError': None, 'onNull': None}},
-                        'prdy_vrss_sign': '$payload.prdy_vrss_sign'
-                    }
-                },
-                # 2. 각 검증 규칙에 대한 결과를 boolean 필드로 추가
-                {
-                    '$addFields': {
-                        'validation_results': {
-                            'is_missing': {'$or': [{'$eq': ['$price', None]}, {'$eq': ['$volume', None]}]},
-                            'is_negative': {'$or': [{'$lt': ['$price', 0]}, {'$lt': ['$volume', 0]}]},
-                            'is_hilo_inverted': {'$lt': ['$high_price', '$low_price']},
-                            'is_price_out_of_range': {'$or': [{'$lt': ['$price', '$low_price']}, {'$gt': ['$price', '$high_price']}]},
-                            'is_sign_invalid': {'$not': {'$in': ['$prdy_vrss_sign', ['1', '2', '3', '4', '5']]}}
-                        }
-                    }
-                },
-                # 3. 하나라도 문제가 있는 경우만 필터링
-                {
-                    '$match': {
-                        '$or': [
-                            {'validation_results.is_missing': True},
-                            {'validation_results.is_negative': True},
-                            {'validation_results.is_hilo_inverted': True},
-                            {'validation_results.is_price_out_of_range': True},
-                            {'validation_results.is_sign_invalid': True}
-                        ]
+                        'raw_data': {'$ifNull': ['$payload', '$raw_data']}, # payload 또는 raw_data 필드를 사용
+                        'insert_date': 1
                     }
                 }
             ]
 
-            anomalous_docs = list(self.collection.aggregate(pipeline))
+            all_docs = list(self.collection.aggregate(pipeline))
+            anomalous_docs = []
+
+            # Python 코드 내에서 데이터를 파싱하고 검증합니다.
+            for doc in all_docs:
+                try:
+                    data_source = doc.get('raw_data')
+                    if isinstance(data_source, str):
+                        payload = json.loads(data_source)
+                    elif isinstance(data_source, dict):
+                        payload = data_source
+                    else:
+                        raise TypeError("Data is not in a recognizable format (dict or json string)")
+                    
+                    price_str = payload.get('stck_prpr')
+                    volume_str = payload.get('cntg_vol')
+                    high_price_str = payload.get('stck_hgpr')
+                    low_price_str = payload.get('stck_lwpr')
+                    sign = payload.get('prdy_vrss_sign')
+
+                    price = float(price_str) if price_str and price_str.strip() else None
+                    volume = int(volume_str) if volume_str and volume_str.strip() else None
+                    high_price = float(high_price_str) if high_price_str and high_price_str.strip() else None
+                    low_price = float(low_price_str) if low_price_str and low_price_str.strip() else None
+
+                    issues = []
+                    # [수정] 각 필드별로 이상 유형과 값을 상세히 기록합니다.
+                    if price is None:
+                        issues.append(f"is_missing(stck_prpr: {price_str})")
+                    elif price < 0:
+                        issues.append(f"is_negative(stck_prpr: {price})")
+                    
+                    if volume is None:
+                        issues.append(f"is_missing(cntg_vol: {volume_str})")
+                    elif volume < 0:
+                        issues.append(f"is_negative(cntg_vol: {volume})")
+
+                    if high_price is not None and low_price is not None:
+                        if high_price < low_price:
+                            issues.append(f"is_hilo_inverted(high: {high_price}, low: {low_price})")
+                        if price is not None and (price < low_price or price > high_price):
+                             issues.append(f"is_price_out_of_range(price: {price}, low: {low_price}, high: {high_price})")
+                    
+                    if sign not in ['1', '2', '3', '4', '5']:
+                        issues.append(f"is_sign_invalid(prdy_vrss_sign: {sign})")
+                    
+                    if issues:
+                        doc['issues'] = issues
+                        anomalous_docs.append(doc)
+
+                except (json.JSONDecodeError, TypeError, KeyError) as e:
+                    self.logger.error(f"Document ID {doc['_id']} 파싱 오류: {e}")
+                    doc['issues'] = ['parsing_error']
+                    anomalous_docs.append(doc)
 
             self.logger.info("===== 검사 결과 =====")
             if not anomalous_docs:
@@ -125,12 +149,9 @@ class MongoDataValidator:
             else:
                 self.logger.warning(f"총 {len(anomalous_docs)}개의 이상 데이터를 발견했습니다:")
                 for doc in anomalous_docs:
-                    validation = doc.get('validation_results', {})
-                    issues = [k for k, v in validation.items() if v]
-                    
                     self.logger.warning(f"  - Document ID: {doc['_id']}, Insert Time: {doc.get('insert_date', 'N/A')}")
-                    self.logger.warning(f"    - 문제 유형: {', '.join(issues)}")
-                    self.logger.warning(f"    - Payload Data: {doc.get('payload')}")
+                    self.logger.warning(f"    - 문제 유형: {', '.join(doc.get('issues', []))}")
+                    self.logger.warning(f"    - Raw Data: {doc.get('raw_data')}")
                     self.logger.warning("")
 
             self.logger.info("=====================")
@@ -139,13 +160,12 @@ class MongoDataValidator:
             self.logger.error(f"검증 중 오류 발생: {e}", exc_info=True)
         finally:
             self.mongo_client.close()
-            self.logger.info("MongoDB 연결이 종료되었습니다.")
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         target_date = sys.argv[1]
     else:
-        KST = timezone(timedelta(hours = 9))
+        KST = timezone(timedelta(hours=9))
         target_date = (datetime.now(KST)).strftime('%Y-%m-%d')
         
     try:
@@ -153,3 +173,4 @@ if __name__ == "__main__":
         validator.find_anomalies(target_date_str=target_date)
     except ValueError as e:
         print(f"스크립트 실행 실패: {e}")
+
