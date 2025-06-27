@@ -84,11 +84,6 @@ def main():
         batch_df.printSchema()
         print("Batch DataFrame 내용 (상위 5개):")
         batch_df.show(5, truncate=False)
-
-        if batch_df.isEmpty(): 
-            print("--- [ Batch ID: {batch_id} ] --- 데이터프레임이 비어있어 S3에 쓰지 않고 종료합니다.")
-            batch_df.unpersist()
-            return
         
         print(f"--- [ Batch ID: {batch_id} ] --- S3에 최종 리포트 추가 시작...")        
         processing_time = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
@@ -96,7 +91,7 @@ def main():
                        .withColumn("update_time", lit(processing_time))
                        .withColumn("vwap", spark_round(col("vwap"), 2))
                        .withColumn("buy_sell_pressure", spark_round(col("buy_sell_pressure"), 2))
-                      )
+        )
         
         pandas_df = df_to_write.toPandas()
         s3 = s3fs.S3FileSystem()
@@ -120,7 +115,8 @@ def main():
              .foreachBatch(write_to_s3)
              .trigger(processingTime="30 seconds") # 성능 경고를 피하기 위해 주기를 30초로 조정
              .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/{today_str}")
-             .start())
+             .start()
+    )
 
     print(f"스트리밍 쿼리 시작. 오늘({today_str})의 종합 시장 분석 리포트를 추가합니다.")
     query.awaitTermination()
