@@ -93,8 +93,8 @@ class HoGa:
     STCK_DEAL_CLS_CODE: str    #주식 매매 구분 코드
 
     """
-    API 원시 데이터(raw_data)의 payload 부분을 split한 리스트를 받아,
-    Hoga 클래스 인스턴스를 생성하여 반환합니다.
+    API 원시 데이터(raw_data)의 데이터 부분을 split한 리스트를 받아,
+    클래스 인스턴스를 생성하여 반환
     """
     @classmethod
     def _parse_h0stasp0(cls, data_parts: List[str]):

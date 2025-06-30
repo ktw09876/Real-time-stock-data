@@ -58,8 +58,8 @@ class CheGyeolGa:
     vi_stnd_prc: Decimal    #정적vi발동기준가
     
     """
-    API 원시 데이터 문자열 리스트를 받아,
-    ResponseBody 클래스 인스턴스를 생성하여 반환합니다.
+    API 원시 데이터(raw_data)의 데이터 부분을 split한 리스트를 받아,
+    클래스 인스턴스를 생성하여 반환
     """
     @classmethod
     def _parse_h0stcnt0(cls, data_parts: List[str]):

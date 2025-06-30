@@ -41,7 +41,7 @@ class ExpectedCheGyeolGa: # 클래스 이름을 더 명확하게 변경
     def _parse_h0stanc0(cls, data_parts: List[str]):
         return cls(
             mksc_shrn_iscd=data_parts[0],
-            bsop_hour=data_parts[1],
+            stck_cntg_hour=data_parts[1],
             stck_prpr=_to_decimal(data_parts[2]),
             prdy_vrss_sign=data_parts[3],
             prdy_vrss=_to_decimal(data_parts[4]),
