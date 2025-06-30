@@ -91,7 +91,7 @@ class MongoDataValidator:
             all_docs = list(self.collection.aggregate(pipeline))
             anomalous_docs = []
 
-            # Python 코드 내에서 데이터를 파싱하고 검증합니다.
+
             for doc in all_docs:
                 try:
                     data_source = doc.get('raw_data')
@@ -114,7 +114,7 @@ class MongoDataValidator:
                     low_price = float(low_price_str) if low_price_str and low_price_str.strip() else None
 
                     issues = []
-                    # [수정] 각 필드별로 이상 유형과 값을 상세히 기록합니다.
+
                     if price is None:
                         issues.append(f"is_missing(stck_prpr: {price_str})")
                     elif price < 0:
