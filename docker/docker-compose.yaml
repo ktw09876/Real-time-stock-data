@@ -3,24 +3,29 @@
 x-common-env: &common-env
   # Airflow 실행을 위한 환경 변수
   AIRFLOW__CORE__EXECUTOR: CeleryExecutor
-  AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
   AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
   AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/1
-  AIRFLOW__CORE__FERNET_KEY: '' # docker-compose up 실행 시 자동으로 생성됨
   AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-  AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-  AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.basic_auth'
-  _PIP_ADDITIONAL_REQUIREMENTS: ''
+  AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Seoul
+  _PIP_ADDITIONAL_REQUIREMENTS: 'pymongo==4.7.0' 
+  
+  # Airflow 이메일 SMTP 설정
+  # AIRFLOW__EMAIL__EMAIL_BACKEND: airflow.utils.email.send_email_smtp
+  # AIRFLOW__SMTP__SMTP_HOST: ${SMTP_HOST}
+  # AIRFLOW__SMTP__SMTP_PORT: ${SMTP_PORT}
+  # AIRFLOW__SMTP__SMTP_USER: ${SMTP_USER}
+  # AIRFLOW__SMTP__SMTP_PASSWORD: ${SMTP_PASSWORD}
+  # AIRFLOW__SMTP__SMTP_MAIL_FROM: ${SMTP_MAIL_FROM}
 
 services:
   # -------------------------------------------------------------------
-  # 기존 데이터 파이프라인 서비스들
+  # 기반 인프라 서비스 (항상 실행)
   # -------------------------------------------------------------------
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: zookeeper
-    ports:
-      - "2181:2181"
+    ports: ["2181:2181"]
     environment: { ZOOKEEPER_CLIENT_PORT: 2181, ZOOKEEPER_TICK_TIME: 2000 }
     volumes:
       - zookeeper_data:/var/lib/zookeeper/data
@@ -29,10 +34,8 @@ services:
   kafka:
     image: confluentinc/cp-kafka:7.5.0
     container_name: kafka
-    depends_on:
-      - zookeeper
-    ports:
-      - "9092:9092"
+    depends_on: [zookeeper]
+    ports: ["9092:9092"]
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
@@ -41,6 +44,8 @@ services:
       KAFKA_LISTENERS: 'INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092'
       KAFKA_INTER_BROKER_LISTENER_NAME: 'INTERNAL'
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
@@ -52,8 +57,7 @@ services:
   mongodb:
     image: mongo:latest
     container_name: mongodb
-    ports:
-      - "27017:27017"
+    ports: ["27017:27017"]
     volumes:
       - mongo_data:/data/db
     healthcheck:
@@ -65,47 +69,46 @@ services:
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
-    ports:
-      - "8080:8080" # Kafka UI는 8080 포트 그대로 사용
+    ports: ["8080:8080"]
     depends_on: { kafka: { condition: service_healthy } }
     environment:
       KAFKA_CLUSTERS_0_NAME: "local-kafka-cluster"
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "${KAFKA_BROKER_INTERNAL}"
 
-  # 서비스
   producer:
     build: .
     container_name: producer
+    profiles: ["streaming-jobs"]
     depends_on: { kafka: { condition: service_healthy } }
     volumes: [".:/app"]
     restart: on-failure
     env_file: [.env]
-    command: ["python3", "-u", "/app/websockets/script/1.data_extract.py"]
+    environment:
+      - TZ=Asia/Seoul
+    command: ["tail", "-f", "/dev/null"]
 
   loader:
     build: .
     container_name: loader
+    profiles: ["streaming-jobs"]
     depends_on: { kafka: { condition: service_healthy }, mongodb: { condition: service_healthy } }
     volumes: [".:/app"]
     restart: on-failure
     env_file: [.env]
     environment:
       - TZ=Asia/Seoul
-    command: ["python3", "-u", "/app/websockets/script/2.mongo_load.py"]
+    command: ["tail", "-f", "/dev/null"]
   
   spark:
     build: .
     container_name: spark
+    profiles: ["streaming-jobs"]
     depends_on: { kafka: { condition: service_healthy } }
     volumes: [".:/app"]
     env_file: [.env]
     environment:
       - TZ=Asia/Seoul
-    command: >
-      spark-submit
-      --packages ${SPARK_PACKAGES}
-      --master local[*]
-      /app/websockets/script/3.report_daily.py
+    command: ["tail", "-f", "/dev/null"]
 
   # -------------------------------------------------------------------
   # Airflow 실행을 위한 서비스들
@@ -117,21 +120,19 @@ services:
       - POSTGRES_USER=airflow
       - POSTGRES_PASSWORD=airflow
       - POSTGRES_DB=airflow
-    ports:
-      - "5432:5432"
+    ports: ["5432:5432"]
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "airflow"]
       interval: 5s
       timeout: 5s
       retries: 5
-    volumes:
+    volumes: 
       - postgres_db_data:/var/lib/postgresql/data
   
   redis:
     image: redis:latest
     container_name: redis
-    ports:
-      - "6379:6379"
+    ports: ["6379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -140,60 +141,63 @@ services:
 
   airflow-webserver:
     image: apache/airflow:2.8.1
+    platform: linux/amd64
     container_name: airflow-webserver
     depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
-    ports:
-      - "8081:8080"
+    ports: ["8081:8080"]
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
-    environment:
-      <<: *common-env
+    environment: { <<: *common-env }
     command: webserver
 
   airflow-scheduler:
     image: apache/airflow:2.8.1
+    platform: linux/amd64
     container_name: airflow-scheduler
     depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
-    environment:
-      <<: *common-env
+    environment: { <<: *common-env }
     command: scheduler
 
   airflow-worker:
     image: apache/airflow:2.8.1
+    platform: linux/amd64
     container_name: airflow-worker
     depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
-      # Docker를 제어하기 위해 Docker 소켓을 컨테이너 내부로 연결
+      - .:/project # docker-compose 파일을 참조할 수 있도록 프로젝트 루트를 마운트
       - /var/run/docker.sock:/var/run/docker.sock 
-    environment:
-      <<: *common-env
-    command: worker
+    environment: { <<: *common-env }
+    # command: celery worker
+    user: "root"
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        if ! getent group docker > /dev/null; then
+          groupadd --gid $$(stat -c '%g' /var/run/docker.sock) docker
+        fi
+        usermod -aG docker airflow
+        exec su -s /bin/bash --command "airflow celery worker" airflow
 
   airflow-init:
     image: apache/airflow:2.8.1
+    platform: linux/amd64
     container_name: airflow-init
     depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
-    environment:
-      <<: *common-env
+    environment: { <<: *common-env }
     entrypoint: /bin/bash
     command:
       - -c
       - |
-        # Airflow 워커가 docker 명령어를 사용할 수 있도록 권한 설정
-        if ! getent group docker > /dev/null; then
-          groupadd --gid $$(stat -c '%g' /var/run/docker.sock) docker
-        fi
-        adduser airflow docker
-        # Airflow DB 초기화 및 관리자 유저 생성
         airflow db init
         airflow users create -u admin -p admin -r Admin -e admin@example.com -f admin -l user
 
@@ -203,5 +207,3 @@ volumes:
   kafka_data:
   mongo_data:
   postgres_db_data:
-
-
