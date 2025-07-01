@@ -18,7 +18,7 @@ def get_latest_producer_dag_run(execution_date, session=None, **kwargs):
         .order_by(DagRun.execution_date.desc())
         .first()
     )
-    return dag_run.execution_date if dag_run else None
+    return [dag_run.execution_date] if dag_run else []
 
 with DAG(
     dag_id="streaming_spark_reporter",
@@ -44,10 +44,10 @@ with DAG(
     run_spark_reporter = BashOperator(
         task_id="run_spark_reporter_task",
         bash_command="""
-            docker exec spark spark-submit \
-            --packages ${SPARK_PACKAGES} \
-            --master 'local[*]' \
-            /app/websockets/script/3.report_daily.py
+            docker exec spark /bin/bash -c 'spark-submit \
+            --packages "${SPARK_PACKAGES}" \
+            --master "local[*]" \
+            /app/websockets/script/3.report_daily.py'
         """,
     )
     

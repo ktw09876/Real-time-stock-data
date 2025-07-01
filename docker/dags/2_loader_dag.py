@@ -18,7 +18,7 @@ def get_latest_producer_dag_run(execution_date, session=None, **kwargs):
         .order_by(DagRun.execution_date.desc())
         .first()
     )
-    return dag_run.execution_date if dag_run else None
+    return [dag_run.execution_date] if dag_run else []
 
 with DAG(
     dag_id="streaming_mongo_loader",
