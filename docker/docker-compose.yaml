@@ -11,12 +11,16 @@ x-common-env: &common-env
   _PIP_ADDITIONAL_REQUIREMENTS: 'pymongo==4.7.0' 
   
   # Airflow 이메일 SMTP 설정
-  # AIRFLOW__EMAIL__EMAIL_BACKEND: airflow.utils.email.send_email_smtp
-  # AIRFLOW__SMTP__SMTP_HOST: ${SMTP_HOST}
-  # AIRFLOW__SMTP__SMTP_PORT: ${SMTP_PORT}
-  # AIRFLOW__SMTP__SMTP_USER: ${SMTP_USER}
-  # AIRFLOW__SMTP__SMTP_PASSWORD: ${SMTP_PASSWORD}
-  # AIRFLOW__SMTP__SMTP_MAIL_FROM: ${SMTP_MAIL_FROM}
+  AIRFLOW__EMAIL__EMAIL_BACKEND: airflow.utils.email.send_email_smtp
+  AIRFLOW__SMTP__SMTP_HOST: smtp.gmail.com
+  AIRFLOW__SMTP__SMTP_PORT: 587
+  AIRFLOW__SMTP__SMTP_USER: ${SMTP_USER}
+  AIRFLOW__SMTP__SMTP_PASSWORD: ${SMTP_PASSWORD}
+  AIRFLOW__SMTP__SMTP_MAIL_FROM: ${SMTP_MAIL_FROM}
+  # AIRFLOW__VARS__RECIPIENT_EMAIL: ${ALERT_RECIPIENT_EMAIL}
+  AIRFLOW__VARS__ALERT_RECIPIENT_EMAIL: ${ALERT_RECIPIENT_EMAIL}
+
+
 
 services:
   # -------------------------------------------------------------------
@@ -143,7 +147,13 @@ services:
     image: apache/airflow:2.8.1
     platform: linux/amd64
     container_name: airflow-webserver
-    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
+    depends_on: 
+      postgres:
+        condition: service_healthy 
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
     ports: ["8081:8080"]
     volumes:
       - ./dags:/opt/airflow/dags
@@ -156,7 +166,13 @@ services:
     image: apache/airflow:2.8.1
     platform: linux/amd64
     container_name: airflow-scheduler
-    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
+    depends_on: 
+      postgres:
+        condition: service_healthy 
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
@@ -168,7 +184,13 @@ services:
     image: apache/airflow:2.8.1
     platform: linux/amd64
     container_name: airflow-worker
-    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
+    depends_on: 
+      postgres:
+        condition: service_healthy 
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
@@ -176,7 +198,6 @@ services:
       - .:/project # docker-compose 파일을 참조할 수 있도록 프로젝트 루트를 마운트
       - /var/run/docker.sock:/var/run/docker.sock 
     environment: { <<: *common-env }
-    # command: celery worker
     user: "root"
     entrypoint:
       - /bin/bash
