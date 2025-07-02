@@ -9,6 +9,7 @@
 <img src="/capture/1.data_extract/Screenshot_1.png" width="1000"/>
 <img src="/capture/1.data_extract/Screenshot_2.png" width="1000"/>
 <img src="/capture/2.mongo_load/Screenshot_1.png" width="1000"/>
+
 1. 삼성전자, SK하이닉스, 카카오 주식의 실시간 호가, 체결가, 예상체결가를 websockets 방식으로 수집, 직렬화 합니다.
 2. 직렬화 한 데이터는 몽고DB 와 kafka 로 각각 보내집니다.
     - 몽고DB에 따로 적재하는 이유
