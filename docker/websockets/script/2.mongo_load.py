@@ -34,6 +34,9 @@ class MongoLoader:
         self.mongo_client, self.db = self._init_mongo()
         self.consumer = self._init_kafka()
 
+        if self.db is None or self.consumer is None:
+            raise ConnectionError("MongoDB 또는 Kafka 초기화에 실패했습니다. 프로그램을 중단합니다.")
+
         # 3. 배치 처리를 위한 설정
         self.batch_size = 100 # MongoDB에 한 번에 쓸 문서(데이터) 개수
         self.flush_interval = 5 # 데이터를 쓸 시간 간격, 배치(기본 100개)가 다 안 차더라도 실행
