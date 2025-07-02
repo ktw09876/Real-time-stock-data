@@ -5,8 +5,6 @@ import logging
 import json # JSON 파싱을 위해 import
 from datetime import datetime, timezone, timedelta
 from pymongo import MongoClient
-from bson.objectid import ObjectId
-from typing import Union, List
 
 class MongoDataValidator:
     """
