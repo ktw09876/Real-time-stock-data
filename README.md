@@ -6,7 +6,6 @@
 - 장 시작시간을 고려하여 평일 08:50분 시작, 16:00에 종료
 - 안정성과 다른 추가 분석을 위한 원본 데이터 별도 수집
 ### 데이터 수집 및 적재(한국투자증권 api --> kafka, MongoDB)
-<img src="/capture/1.data_extract/Screenshot_1.png" width="1000"/>
 <img src="/capture/1.data_extract/Screenshot_2.png" width="1000"/>
 <img src="/capture/2.mongo_load/Screenshot_1.png" width="1000"/>
 
@@ -23,7 +22,6 @@
 2. 오늘 날짜로 필터링해서 실시간으로 분석합니다.
 ### 분석 결과 리포트 적재(Spark --> AWS s3)
 <img src="/capture/3.report_daily/Screenshot_1.png" width="1000"/>
-<img src="/capture/3.report_daily/Screenshot_2.png" width="1000"/>
 <img src="/capture/3.report_daily/Screenshot_3.png" width="1000"/>
 
 1. 집계한 결과는 aws s3 버킷에 저장됩니다.
