@@ -39,8 +39,8 @@
 - OpenSearch 를 연결할 때 발생한 에러 해결 못함
     - 스파크 버전 호환
     - OpenSearch 자격 증명
-    
-이와 같은 이유로 GCP ElasticSearch 사용 결정
+
+--> 이와 같은 이유로 GCP ElasticSearch 사용 결정
 ### Airflow와 Docker
 - Docker를 이용해서 각 단계를 컨테이너로 감싸서 환경을 분리한다는건 좋았음
 - 여기에 Airflow를 도입하면서 Airflow가 Docker Container 안에서 각 단계별 .py를 실행한다는 개념이 어려웠음
