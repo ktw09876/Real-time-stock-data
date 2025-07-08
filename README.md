@@ -22,7 +22,7 @@
 2. 오늘 날짜로 필터링해서 실시간으로 분석합니다.
 ### 분석 결과 리포트 적재(Spark --> GCP ElasticSearch)
 1. 집계한 결과는 GCP ElasticSearch 에 저장됩니다.
-### 시각화 
+### 시각화(Kibana)
 <img src="/capture/6.visualization/dashboards.png" width="1000"/>
 
 ## 배치 작업(AirFlow)
