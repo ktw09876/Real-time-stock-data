@@ -23,7 +23,7 @@
 ### 분석 결과 리포트 적재(Spark --> GCP ElasticSearch)
 1. 집계한 결과는 GCP ElasticSearch 에 저장됩니다.
 ### 시각화 
-<img src="/capture/6.visualization/dashboards.png.png" width="1000"/>
+<img src="/capture/6.visualization/dashboards.png" width="1000"/>
 
 ## 배치 작업(AirFlow)
 <img src="/capture/4.quality_test_mongo/test_mongo_log.png" width="1000"/>
