@@ -40,7 +40,8 @@ __pycache__/
 docker/.env
 
 .ini
-output.txt
 
 .idea/
 .vscode/
+checkpoints/
+*.crc

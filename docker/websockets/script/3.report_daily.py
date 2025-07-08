@@ -2,7 +2,7 @@
 import os
 from datetime import datetime, timezone, timedelta
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, date_format, lit, round as spark_round, when
+from pyspark.sql.functions import from_json, col, date_format, lit, round as spark_round, when, current_timestamp
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, LongType
 import s3fs
 
@@ -21,9 +21,18 @@ def main():
         raise ValueError(f"필수 환경 변수가 설정되지 않았습니다: {', '.join(missing_vars)}")
 
     KAFKA_BROKER = os.getenv('KAFKA_BROKER_INTERNAL')
-    # .env 파일과 변수 이름을 맞춥니다.
     TRADE_TOPIC = os.getenv('SPARK_TRADE_TOPIC')
-    S3_BUCKET = os.getenv('S3_BUCKET')
+    # S3_BUCKET = os.getenv('S3_BUCKET')
+
+    ES_ENDPOINT_URL = os.getenv('ES_ENDPOINT')
+    if ES_ENDPOINT_URL and "://" in ES_ENDPOINT_URL:
+        ES_HOST = ES_ENDPOINT_URL.split("://")[1]
+    else:
+        ES_HOST = ES_ENDPOINT_URL
+
+    ES_PORT = os.getenv('ES_PORT')
+    ES_USERNAME = os.getenv('ES_USERNAME')
+    ES_PASSWORD = os.getenv('ES_PASSWORD')
     
     KST = timezone(timedelta(hours=9))
 
@@ -44,7 +53,7 @@ def main():
         StructField("total_bidp_rsqn", StringType()),
     ])
 
-    # 4. Kafka 스트림 읽기 (이제 토픽 하나만 구독합니다)
+    # 4. Kafka 스트림 읽기
     kafka_stream = (spark.readStream
             .format("kafka")
             .option("kafka.bootstrap.servers", KAFKA_BROKER)
@@ -64,62 +73,37 @@ def main():
     result_df = (parsed_df
         .select(
             col("stock_code"),
-            col("data.acml_vol").alias("cumulative_volume"), #cumulative_volume
-            col("data.acml_tr_pbmn").alias("cumulative_value"),
-            col("data.cttr").alias("trade_strength"),
-            col("data.total_askp_rsqn").alias("total_ask_qty"),
-            col("data.total_bidp_rsqn").alias("total_bid_qty"),
-        ).filter(col("cumulative_volume") > 0) # 0으로 나누는 오류를 방지하기 위해 필터링
+            col("data.acml_vol").cast(LongType()).alias("cumulative_volume"),
+            col("data.acml_tr_pbmn").cast(LongType()).alias("cumulative_value"),
+            col("data.cttr").cast(LongType()).alias("trade_strength"),
+            col("data.total_askp_rsqn").cast(LongType()).alias("total_ask_qty"),
+            col("data.total_bidp_rsqn").cast(LongType()).alias("total_bid_qty"),
+        ).filter(col("cumulative_volume").isNotNull() & (col("cumulative_volume") > 0)) # 0으로 나누는 오류를 방지
         .withColumn("vwap", col("cumulative_value") / col("cumulative_volume")) # VWAP (거래량 가중 평균 가격)
-        .withColumn("buy_sell_pressure", when(col("total_ask_qty") > 0, col("total_bid_qty") / col("total_ask_qty")).otherwise(0)) # 매수/매도 압력: total_ask_qty가 0보다 클 때만 계산하고, 아니면 0을 반환
+        .withColumn("buy_sell_pressure", when(col("total_ask_qty") > 0, col("total_bid_qty") / col("total_ask_qty")).otherwise(0)) # 매수/매도 압력: total_ask_qty가 0보다 클 때만 계산하고, 아니면 0을 반환)
+        .withColumn("update_time", current_timestamp())
     )
 
-    # 6. S3에 스트림 쓰기
-    today_str = datetime.now(KST).strftime("%Y-%m-%d")
-    def write_to_s3(batch_df, batch_id):
-        print(f"--- [ Batch ID: {batch_id} ] --- write_to_s3 함수 진입 ---")
-        # 디버깅
-        batch_df.cache()
-        print("Batch DataFrame 스키마:")
-        batch_df.printSchema()
-        print("Batch DataFrame 내용 (상위 5개):")
-        batch_df.show(5, truncate=False)
-        
-        print(f"--- [ Batch ID: {batch_id} ] --- S3에 최종 리포트 추가 시작...")        
-        processing_time = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
-        df_to_write = (batch_df
-                       .withColumn("update_time", lit(processing_time))
-                       .withColumn("vwap", spark_round(col("vwap"), 2))
-                       .withColumn("buy_sell_pressure", spark_round(col("buy_sell_pressure"), 2))
-        )
-        
-        pandas_df = df_to_write.toPandas()
-        s3 = s3fs.S3FileSystem()
-        
-        for stock_code_val, group_df in pandas_df.groupby('stock_code'):
-            target_file_path = f"s3a://{S3_BUCKET}/daily_report/stock_code={stock_code_val}/{today_str}.csv"
-            final_columns = ['stock_code', 'update_time', 'cumulative_volume', 'cumulative_value', 'vwap', 'trade_strength', 'buy_sell_pressure']
-            data_to_write = group_df[final_columns]
-            
-            try:
-                file_exists = s3.exists(target_file_path)
-                csv_buffer = data_to_write.to_csv(header=not file_exists, index=False)
-                with s3.open(target_file_path, 'a') as f: f.write(csv_buffer)
-            except Exception as e: print(f"Error for {stock_code_val}: {e}")
-
-        batch_df.unpersist() # 캐시 해제
-        print(f"--- [ Batch ID: {batch_id} ] --- 쓰기 완료.")
-
+    es_resource = f"stock_report_{datetime.now().strftime('%Y-%m-%d')}"
     query = (result_df.writeStream
-             .outputMode("update")
-             .foreachBatch(write_to_s3)
-             .trigger(processingTime="30 seconds") # 성능 경고를 피하기 위해 주기를 30초로 조정
-             .option("checkpointLocation", f"s3a://{S3_BUCKET}/checkpoints/{today_str}")
-             .start()
-    )
-
-    print(f"스트리밍 쿼리 시작. 오늘({today_str})의 종합 시장 분석 리포트를 추가합니다.")
+            .outputMode("append")
+            .format("console") 
+            .format("org.elasticsearch.spark.sql")
+            .option("es.nodes", ES_HOST)
+            .option("es.port", ES_PORT)
+            .option("es.net.ssl", "true")
+            .option("es.net.http.auth.user", ES_USERNAME)
+            .option("es.net.http.auth.pass", ES_PASSWORD)
+            .option("es.nodes.wan.only", "true")
+            .option("es.nodes.discovery", "false")
+            .option("es.resource", es_resource)
+            # .option("es.mapping.id", "stock_code")
+            .option("es.mapping.properties.update_time", "date")
+            .option("checkpointLocation", "./checkpoints/es_report")
+            .start())
+    print(f"스트리밍 쿼리 시작. 결과를 GCP ElasticSearch 으로 전송합니다.")
     query.awaitTermination()
+
 
 if __name__ == "__main__":
     main()

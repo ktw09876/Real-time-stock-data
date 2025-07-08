@@ -1,5 +1,6 @@
 # 1. 공식 PySpark 이미지 사용
-FROM apache/spark:3.5.1-python3
+#FROM apache/spark:3.4.1-python3
+FROM apache/spark:3.4.1-scala2.12-java11-python3-ubuntu
 
 # 2. 모든 설치 작업을 위해 root 사용자로 전환
 USER root
@@ -13,6 +14,10 @@ RUN mkdir -p /home/spark/.ivy2 && \
 WORKDIR /app
 
 # 5. 파이썬 의존성 설치 (캐시 활용을 위해 먼저 복사)
+COPY ./jars /app/jars/
+# COPY ./jars/elasticsearch-spark-30_2.12-8.17.8.jar /opt/spark/jars/
+# COPY ./jars/spark-sql-kafka-0-10_2.12-3.4.1.jar /opt/spark/jars/
+# COPY ./jars/kafka-clients-3.4.1.jar /opt/spark/jars/
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
