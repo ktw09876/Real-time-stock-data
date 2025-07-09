@@ -1,5 +1,5 @@
 # 실시간 주식 데이터 연계
-<img src="/capture/pipeline_capture.png" width="1000"/>
+<img src="/capture/pipeline_capture.png" width="1000"/> 
 
 ## 실시간 주식 데이터 자동화 분석을 위한 파이프라인 제작 및 배치 
 - 국내 주식의 실시간 체결가를 수집해서 VWAP (거래량 가중 평균 가격)을 계산
