@@ -13,5 +13,5 @@ with DAG(
 ) as dag:
     run_data_producer = BashOperator(
         task_id="run_data_producer_task",
-        bash_command="docker exec producer python3 -u /app/websockets/script/1.data_extract.py",
+        bash_command="docker exec producer python3 -u /app/pipeline/script/1.data_extract.py",
     )

@@ -26,5 +26,5 @@ with DAG(
     run_quality_validation = BashOperator(
         task_id="run_quality_validation_task",
         # {{ params.target_date }}를 사용하여 전달된 파라미터 값을 사용합니다.
-        bash_command="docker exec loader python3 /app/websockets/script/4.quality_test_mongo.py {{ params.target_date }}",
+        bash_command="docker exec loader python3 /app/pipeline/script/4.quality_test_mongo.py {{ params.target_date }}",
     )

@@ -43,7 +43,7 @@ with DAG(
 
     run_mongo_loader = BashOperator(
         task_id="run_mongo_loader_task",
-        bash_command="docker exec loader python3 -u /app/websockets/script/2.mongo_load.py",
+        bash_command="docker exec loader python3 -u /app/pipeline/script/2.mongo_load.py",
     )
 
     # 센서가 성공해야 로더가 실행되도록 종속성 설정

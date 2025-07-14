@@ -47,7 +47,7 @@ with DAG(
     # 작업 1-2: 데이터 지연 시간을 확인하는 스크립트 실행
     check_mongodb_latency = BashOperator(
         task_id="check_mongodb_latency_task",
-        bash_command="docker exec loader python3 /app/websockets/script/5.data_monitoring.py",
+        bash_command="docker exec loader python3 /app/pipeline/script/5.data_monitoring.py",
     )
 
     # 작업 2: 모든 검사가 성공했을 때만 실행되는 '성공' 더미 태스크
