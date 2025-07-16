@@ -59,7 +59,7 @@
 1. type = long 으로 생성, 적재됨
 2. type = text 으로 생성, 적재됨
 3. UTC 형식으로 생성, 적재됨
-```
+```python
 spark = (...
         .config("spark.sql.session.timeZone", "Asia/Seoul") 
         ...)
