@@ -54,6 +54,21 @@
 
 결론: 윈도우 서비스를 종료하던지 도커의 포트 번호를 다르게 하자
 
+### 시간 type 문제
+상황: 실시간 데이터를 확인하기 위한 'update_time' 컬럼을 생성,  ElasticSearch 에 적재했음, 하지만 
+1. type = long 으로 생성, 적재됨
+2. type = text 으로 생성, 적재됨
+3. UTC 형식으로 생성, 적재됨
+```
+spark = (...
+        .config("spark.sql.session.timeZone", "Asia/Seoul") 
+        ...)
+
+.withColumn("update_time", date_format(current_timestamp(), "yyyy-MM-dd'T'HH:mm:ssXXX")) # 'T':날짜와 시간을 구분하기 위한 문자, "XXX":UTC 시간으로부터 한국 시간과의 차이를 나타낸다 Elasticsearch 에서 한국 시간을 인지하기 위한 옵션
+```
+--> 위 두 옵션을 주고 Kibana에서 update_time 컬럼의 set Format 을 수정해서 해결
+
+
 ### 구현 예정
 - api 를 호출하기 때문에 가능성은 낮지만 처리에 실패하는 메시지가 생길 수 있음
     - DLQ(Dead Letter Queue) 를 도입해서 실패한 메시지를 모아 패턴을 분석해서 대응하는 과정이 필요
