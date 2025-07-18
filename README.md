@@ -2,7 +2,7 @@
 <img src="/capture/pipeline_capture.png" width="1000"/> 
 
 ## 실시간 주식 데이터 자동화 분석을 위한 파이프라인 제작 및 배치 
-- 국내 주식의 실시간 체결가를 수집해서 VWAP (거래량 가중 평균 가격)을 계산, GCP ElasticSearch 에 적재. Kibana 로 시각화
+- 국내 주식의 실시간 체결가를 수집해서 VWAP (거래량 가중 평균 가격)을 계산, GCP ElasticSearch 에 적재, Kibana 로 시각화
 - 수집 종목 개수 - 41 개
 - 수집 데이터 크기: 1시간에 약 700MB
 - 장 시작시간을 고려하여 평일 08:50분 시작, 16:00에 종료
