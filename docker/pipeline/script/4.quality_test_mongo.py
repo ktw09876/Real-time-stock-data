@@ -6,24 +6,36 @@ import json # JSON 파싱을 위해 import
 from datetime import datetime, timezone, timedelta
 from pymongo import MongoClient
 
+"""
+MongoDB에 저장된 구조화된 데이터의 품질을 검증하고,
+그 결과를 로그 파일로 저장하는 클래스.
+- 결측치/음수, 논리적 일관성, 값 범위, 카테고리 값 유효성 검증
+"""
 class MongoDataValidator:
+    
     """
-    MongoDB에 저장된 구조화된 데이터의 품질을 검증하고,
-    그 결과를 로그 파일로 저장하는 클래스.
-    - 결측치/음수, 논리적 일관성, 값 범위, 카테고리 값 유효성 검증
+    초기화. 환경 변수에서 설정을 로드하고 로거 및 MongoDB를 설정
     """
     def __init__(self, target_date_str: str):
-        """초기화. 환경 변수에서 설정을 로드하고 로거 및 MongoDB를 설정합니다."""
-        self._setup_logging(target_date_str)
-        self._load_and_validate_env_vars()
+        # 0. 환경 변수 확인
+        self._test_env_var()
+
+        self.mongo_host = os.getenv('MONGO_HOST')
+        self.mongo_port = int(os.getenv('MONGO_PORT'))
+        self.mongo_db_name = os.getenv('MONGO_DATABASE')
+        self.collection_name = os.getenv('KAFKA_TOPICS')
+
+        self._setup_logging(target_date_str) # 로거 세팅
 
         # MongoDB 클라이언트 초기화
         self.mongo_client = MongoClient(host=self.mongo_host, port=self.mongo_port)
         self.db = self.mongo_client[self.mongo_db_name]
         self.collection = self.db[self.collection_name]
 
+    """
+    로거를 설정, 콘솔과 파일에 모두 출력
+    """
     def _setup_logging(self, target_date_str: str):
-        """로거를 설정하여 콘솔과 파일에 모두 출력되도록 합니다."""
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.INFO)
         
@@ -48,23 +60,29 @@ class MongoDataValidator:
         
         self.logger.info(f"로그 파일이 '{log_file_path}' 경로에 저장됩니다.")
 
-    def _load_and_validate_env_vars(self):
-        """필수 환경 변수를 로드하고 검증합니다."""
-        required_vars = [
-            'MONGO_HOST', 'MONGO_PORT', 'MONGO_DATABASE', 'SPARK_TRADE_TOPIC'
+    """
+    필수 환경 변수를 로드하고 검증
+    """
+    def _test_env_var(self):
+        test_env_var = [
+            'MONGO_HOST',
+            'MONGO_PORT', 
+            'MONGO_DATABASE', 
+            'KAFKA_TOPICS'
         ]
-        missing_vars = [var for var in required_vars if not os.getenv(var)]
+
+        missing_vars = []
+        for var in test_env_var:
+            if not os.getenv(var):
+                missing_vars.append(var)
+
         if missing_vars:
             raise ValueError(f"필수 환경 변수가 설정되지 않았습니다: {', '.join(missing_vars)}")
 
-        self.mongo_host = os.getenv('MONGO_HOST')
-        self.mongo_port = int(os.getenv('MONGO_PORT'))
-        self.mongo_db_name = os.getenv('MONGO_DATABASE')
-        # .env 파일과 변수 이름을 일치시킵니다.
-        self.collection_name = os.getenv('SPARK_TRADE_TOPIC')
-
+    """
+    지정된 날짜의 데이터에서 이상 데이터 필터
+    """
     def find_anomalies(self, target_date_str: str):
-        """지정된 날짜의 데이터에서 다양한 유형의 이상 데이터를 찾습니다."""
         self.logger.info(f"===== {target_date_str} 날짜의 데이터 이상치 검사 시작 =====")
         self.logger.info(f"대상 DB: {self.mongo_db_name}, 컬렉션: {self.collection_name}")
 

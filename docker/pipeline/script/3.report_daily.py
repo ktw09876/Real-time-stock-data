@@ -2,9 +2,8 @@
 import os
 from datetime import datetime
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, date_format, when, current_timestamp, explode, length 
-from pyspark.sql.types import StructType, StructField, StringType, LongType, ArrayType
-from pyspark.sql.functions import broadcast
+from pyspark.sql.functions import from_json, col, date_format, when, current_timestamp, explode, length, to_date, current_date, broadcast
+from pyspark.sql.types import StructType, StructField, StringType, LongType
 
 """
 Kafka의 체결가 토픽(H0STCNT0) 하나만 구독하여,
@@ -12,12 +11,21 @@ VWAP, 체결강도, 매수/매도 압력 등 종합적인 시장 지표를 계�
 그 결과를 GCP ElasticSearch 에 적재하는 Spark Structured Streaming 애플리케이션.
 """
 def main():
-    # 1. 환경 변수에서 설정 값 로드 및 검증
-    required_vars = [
+    # 0. 환경 변수에서 설정 값 로드 및 검증
+    test_env_var = [
         'KAFKA_BROKER_INTERNAL',
-        'KAFKA_TOPICS'
+        'KAFKA_TOPICS',
+        'ES_ENDPOINT',
+        'ES_PORT',
+        'ES_USERNAME',
+        'ES_PASSWORD'
     ]
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
+
+    missing_vars = []
+    for var in test_env_var:
+        if not os.getenv(var):
+            missing_vars.append(var)
+    
     if missing_vars:
         raise ValueError(f"필수 환경 변수가 설정되지 않았습니다: {', '.join(missing_vars)}")
 
@@ -34,19 +42,19 @@ def main():
     ES_USERNAME = os.getenv('ES_USERNAME')
     ES_PASSWORD = os.getenv('ES_PASSWORD')
 
-    # 2. Spark Session 생성
+    # 1. Spark Session 생성
     spark = (SparkSession.builder
              .appName("RealtimeMarketAnalysisStateless")
              .config("spark.sql.session.timeZone", "Asia/Seoul")
              .getOrCreate())
 
-    # 3. sector_info 파일을 읽어 DataFrame으로 만들고, 
+    # 2. sector_info 파일을 읽어 DataFrame으로 만들고, 
     sector_df = spark.read.option("multiline", "true") \
                      .json("/app/pipeline/sector/sector_info.json") \
                      .withColumn("sector", explode(col("sectors"))) \
                      .drop("sectors")
-    # broadcast로 모든 노드에 배포
-    broadcasted_sector_df = broadcast(sector_df)
+    
+    broadcasted_sector_df = broadcast(sector_df) # broadcast로 모든 노드에 배포
 
     # 데이터 스키마 정의 (kafka의 H0STCNT0 JSON 파싱용)
     trade_schema = StructType([
@@ -58,30 +66,33 @@ def main():
         StructField("total_bidp_rsqn", StringType()),
     ])
 
-    # 4. Kafka 스트림 읽기
+    # 3. Kafka 스트림 읽기
     kafka_stream = (spark.readStream
             .format("kafka")
             .option("kafka.bootstrap.servers", KAFKA_BROKER)
             .option("subscribe", TRADE_TOPIC)
             .option("failOnDataLoss", "false")
             .load())
+    
+    # 4. 오늘 날짜로 필터
+    today_df = kafka_stream.filter(to_date(col("timestamp")) == current_date())
 
     # 5. kafka 메시지를 파싱하여 데이터프레임으로 변환
-    parsed_df = kafka_stream.select(
+    parsed_df = today_df.select(
         # col("value").cast("string"), # 원본
         from_json(col("value").cast("string"), trade_schema).alias("data"), 
         col("key").cast("string").alias("stock_code"),
         length(col("value")).alias("message_size_bytes")
     )
 
-    # sector 와 조인
+    # 6. sector 와 조인
     joined_df = parsed_df.join(
         broadcasted_sector_df,
         parsed_df.stock_code == broadcasted_sector_df.stock_code,
         "left"
     ).select(parsed_df["*"], broadcasted_sector_df["sector"], broadcasted_sector_df["name"])
 
-    # 지표를 계산하고 컬럼 이름을 부여합니다.
+    # 7.지표 계산, 컬럼 이름을 부여
     result_df = (joined_df
         .select(
             col("stock_code"),
@@ -100,6 +111,7 @@ def main():
         .withColumn("update_time", date_format(current_timestamp(), "yyyy-MM-dd'T'HH:mm:ssXXX")) # 'T':날짜와 시간을 구분하기 위한 문자, "XXX":UTC 시간으로부터 한국 시간과의 차이를 나타낸다 Elasticsearch 에서 한국 시간을 인지하기 위한 옵션
     )
 
+    # 8. ElasticSearch 적재
     es_resource = f"stock_report_{datetime.now().strftime('%Y-%m-%d')}"
     query = (result_df.writeStream
             .outputMode("append")
@@ -120,7 +132,6 @@ def main():
             .start())
     print(f"스트리밍 쿼리 시작. 결과를 GCP ElasticSearch 으로 전송합니다.")
     query.awaitTermination() # 스트리밍이 종료될때까지 계속 실행
-
 
 if __name__ == "__main__":
     main()

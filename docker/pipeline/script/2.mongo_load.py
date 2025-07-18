@@ -12,8 +12,6 @@ Kafka 토픽에서 원본 데이터를 구독하여 MongoDB에 저장하는 클�
 class MongoLoader:
     """
     클래스 초기화. 환경 변수에서 설정을 로드하고 MongoDB 및 Kafka 연결을 생성
-        :param batch_size: MongoDB에 한 번에 쓸 최대 문서 수
-        :param flush_interval: 배치 크기에 도달하지 않더라도 데이터를 쓸 시간 간격(초)
     """
     def __init__(self):
         # 0. 환경 변수 확인
@@ -169,8 +167,11 @@ class MongoLoader:
         finally:
             print("남아있는 버퍼 데이터를 저장합니다...")
             self._flush_buffer() # 종료 전 버퍼에 남은 데이터 모두 저장
-            if self.consumer: self.consumer.close()
-            if self.mongo_client: self.mongo_client.close()
+            if self.consumer: 
+                self.consumer.close()
+                
+            if self.mongo_client: 
+                self.mongo_client.close()
             print("Kafka Consumer 및 MongoDB 연결이 종료되었습니다.")
 
 if __name__ == "__main__":

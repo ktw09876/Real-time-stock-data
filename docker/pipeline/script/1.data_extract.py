@@ -16,8 +16,8 @@ from dataclasses import asdict, is_dataclass
 from decimal import Decimal
 
 from models.H0STCNT0_response import CheGyeolGa
-from models.H0STASP0_response import HoGa
-from models.H0STANC0_response import ExpectedCheGyeolGa
+# from models.H0STASP0_response import HoGa
+# from models.H0STANC0_response import ExpectedCheGyeolGa
 
 """
 한국투자증권 WebSocket API로부터 실시간 주식 데이터를 수신하여
@@ -48,8 +48,10 @@ class KisApiProducer:
         for code in kafka_stock_codes.split(','):
             self.stock_codes.append(code.strip())
 
+        # 2 로그 세팅
         self._setup_logging()
-        # 2. Kafka Producer 및 토큰 정보 초기화
+
+        # 3. Kafka Producer 및 토큰 정보 초기화
         self.producer = self._init_kafka()
         self.approval_key = None
         self.key_issued_time = None
@@ -124,7 +126,7 @@ class KisApiProducer:
         url = f"{self.BASE_URL}/oauth2/Approval"
 
         try:
-            time.sleep(0.1) # 짧은 시간 연속 호출 방지
+            time.sleep(0.1)
             response = requests.post(url, headers = headers, data = json.dumps(body))
             response.raise_for_status() # HTTP 오류 발생 시 예외 발생
             res = response.json()
@@ -136,8 +138,6 @@ class KisApiProducer:
                 self.key_issued_time = datetime.now()
             else:
                 print(f"Approval Key 발급 실패: {res}")
-        except requests.exceptions.RequestException as e:
-            print(f"Approval Key 발급 중 HTTP 오류 발생: {e}")
         except Exception as e:
             print(f"Approval Key 발급 중 예외 발생: {e}")
 
@@ -226,11 +226,11 @@ class KisApiProducer:
                     if tr_id == 'H0STCNT0':
                         message_object = CheGyeolGa._parse_h0stcnt0(raw_payload)
 
-                    elif tr_id == 'H0STASP0':
-                        message_object = HoGa._parse_h0stasp0(raw_payload)
+                    # elif tr_id == 'H0STASP0':
+                    #     message_object = HoGa._parse_h0stasp0(raw_payload)
 
-                    elif tr_id == 'H0STANC0':
-                        message_object = ExpectedCheGyeolGa._parse_h0stanc0(raw_payload)
+                    # elif tr_id == 'H0STANC0':
+                    #     message_object = ExpectedCheGyeolGa._parse_h0stanc0(raw_payload)
 
                     else:
                         message_object = "확인필요"
@@ -238,10 +238,6 @@ class KisApiProducer:
                     if message_object:
                         # 객체를 JSON으로 직렬화하여 Kafka로 전송
                         self.producer.send(topic = tr_id, key = stock_code.encode('utf-8'), value = message_object)
-                    
-                    # 원본 데이터를 tr_id를 토픽으로 하여 전송
-                    # 종목 코드를 메시지 key로 사용하여 파티셔닝
-                    # self.producer.send(topic=tr_id, key=stock_code.encode('utf-8'), value=data)
 
 
                 # PINGPONG 또는 응답 메시지
