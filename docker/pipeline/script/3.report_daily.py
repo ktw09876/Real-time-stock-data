@@ -1,28 +1,28 @@
 # -*- coding: utf-8 -*-
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, date_format, lit, round as spark_round, when, current_timestamp
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType, LongType
-import s3fs
+from pyspark.sql.functions import from_json, col, date_format, when, current_timestamp, explode, length 
+from pyspark.sql.types import StructType, StructField, StringType, LongType, ArrayType
+from pyspark.sql.functions import broadcast
 
+"""
+Kafka의 체결가 토픽(H0STCNT0) 하나만 구독하여,
+VWAP, 체결강도, 매수/매도 압력 등 종합적인 시장 지표를 계산하고
+그 결과를 GCP ElasticSearch 에 적재하는 Spark Structured Streaming 애플리케이션.
+"""
 def main():
-    """
-    [최종] Kafka의 체결가 토픽(H0STCNT0) 하나만 구독하여,
-    VWAP, 체결강도, 매수/매도 압력 등 종합적인 시장 지표를 계산하고
-    그 결과를 S3의 단일 CSV 파일에 추가하는 Spark Structured Streaming 애플리케이션.
-    """
     # 1. 환경 변수에서 설정 값 로드 및 검증
     required_vars = [
-        'KAFKA_BROKER_INTERNAL', 'SPARK_TRADE_TOPIC', 'S3_BUCKET'
+        'KAFKA_BROKER_INTERNAL',
+        'KAFKA_TOPICS'
     ]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     if missing_vars:
         raise ValueError(f"필수 환경 변수가 설정되지 않았습니다: {', '.join(missing_vars)}")
 
     KAFKA_BROKER = os.getenv('KAFKA_BROKER_INTERNAL')
-    TRADE_TOPIC = os.getenv('SPARK_TRADE_TOPIC')
-    # S3_BUCKET = os.getenv('S3_BUCKET')
+    TRADE_TOPIC = os.getenv('KAFKA_TOPICS')
 
     ES_ENDPOINT_URL = os.getenv('ES_ENDPOINT')
     if ES_ENDPOINT_URL and "://" in ES_ENDPOINT_URL:
@@ -33,17 +33,22 @@ def main():
     ES_PORT = os.getenv('ES_PORT')
     ES_USERNAME = os.getenv('ES_USERNAME')
     ES_PASSWORD = os.getenv('ES_PASSWORD')
-    
-    KST = timezone(timedelta(hours=9))
 
     # 2. Spark Session 생성
     spark = (SparkSession.builder
              .appName("RealtimeMarketAnalysisStateless")
+             .config("spark.sql.session.timeZone", "Asia/Seoul")
              .getOrCreate())
-    
-    spark.sparkContext._jsc.hadoopConfiguration().set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
 
-    # 3. 데이터 스키마 정의 (H0STCNT0 JSON 파싱용)
+    # 3. sector_info 파일을 읽어 DataFrame으로 만들고, 
+    sector_df = spark.read.option("multiline", "true") \
+                     .json("/app/pipeline/sector/sector_info.json") \
+                     .withColumn("sector", explode(col("sectors"))) \
+                     .drop("sectors")
+    # broadcast로 모든 노드에 배포
+    broadcasted_sector_df = broadcast(sector_df)
+
+    # 데이터 스키마 정의 (kafka의 H0STCNT0 JSON 파싱용)
     trade_schema = StructType([
         StructField("stck_prpr", StringType()),
         StructField("acml_vol", StringType()),
@@ -61,18 +66,28 @@ def main():
             .option("failOnDataLoss", "false")
             .load())
 
-    # 5. 최종 지표 계산 (Stateless 변환)
-    # JSON 메시지를 파싱하여 데이터프레임으로 변환
+    # 5. kafka 메시지를 파싱하여 데이터프레임으로 변환
     parsed_df = kafka_stream.select(
         # col("value").cast("string"), # 원본
         from_json(col("value").cast("string"), trade_schema).alias("data"), 
-        col("key").cast("string").alias("stock_code")
+        col("key").cast("string").alias("stock_code"),
+        length(col("value")).alias("message_size_bytes")
     )
 
+    # sector 와 조인
+    joined_df = parsed_df.join(
+        broadcasted_sector_df,
+        parsed_df.stock_code == broadcasted_sector_df.stock_code,
+        "left"
+    ).select(parsed_df["*"], broadcasted_sector_df["sector"], broadcasted_sector_df["name"])
+
     # 지표를 계산하고 컬럼 이름을 부여합니다.
-    result_df = (parsed_df
+    result_df = (joined_df
         .select(
             col("stock_code"),
+            col("sector"),
+            col("name"),
+            col("message_size_bytes"),
             col("data.acml_vol").cast(LongType()).alias("cumulative_volume"),
             col("data.acml_tr_pbmn").cast(LongType()).alias("cumulative_value"),
             col("data.cttr").cast(LongType()).alias("trade_strength"),
@@ -81,14 +96,15 @@ def main():
         ).filter(col("cumulative_volume").isNotNull() & (col("cumulative_volume") > 0)) # 0으로 나누는 오류를 방지
         .withColumn("vwap", col("cumulative_value") / col("cumulative_volume")) # VWAP (거래량 가중 평균 가격)
         .withColumn("buy_sell_pressure", when(col("total_ask_qty") > 0, col("total_bid_qty") / col("total_ask_qty")).otherwise(0)) # 매수/매도 압력: total_ask_qty가 0보다 클 때만 계산하고, 아니면 0을 반환)
-        .withColumn("update_time", current_timestamp())
+        # .withColumn("update_time", date_format(current_timestamp(), "yyyy-MM-dd'T'HH:mm:ss"))
+        .withColumn("update_time", date_format(current_timestamp(), "yyyy-MM-dd'T'HH:mm:ssXXX")) # 'T':날짜와 시간을 구분하기 위한 문자, "XXX":UTC 시간으로부터 한국 시간과의 차이를 나타낸다 Elasticsearch 에서 한국 시간을 인지하기 위한 옵션
     )
 
     es_resource = f"stock_report_{datetime.now().strftime('%Y-%m-%d')}"
     query = (result_df.writeStream
             .outputMode("append")
-            .format("console") 
-            .format("org.elasticsearch.spark.sql")
+            # .format("console")                     # 데이터프레임 콘솔 출력
+            .format("org.elasticsearch.spark.sql") # 데이터프레임 ElasticSearch 로 보냄
             .option("es.nodes", ES_HOST)
             .option("es.port", ES_PORT)
             .option("es.net.ssl", "true")
@@ -97,12 +113,13 @@ def main():
             .option("es.nodes.wan.only", "true")
             .option("es.nodes.discovery", "false")
             .option("es.resource", es_resource)
-            # .option("es.mapping.id", "stock_code")
+            .option("es.mapping.properties.sector", "keyword")
+            .option("es.mapping.properties.name", "keyword")
             .option("es.mapping.properties.update_time", "date")
             .option("checkpointLocation", "./checkpoints/es_report")
             .start())
     print(f"스트리밍 쿼리 시작. 결과를 GCP ElasticSearch 으로 전송합니다.")
-    query.awaitTermination()
+    query.awaitTermination() # 스트리밍이 종료될때까지 계속 실행
 
 
 if __name__ == "__main__":
