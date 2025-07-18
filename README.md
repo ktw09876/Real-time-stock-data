@@ -2,7 +2,9 @@
 <img src="/capture/pipeline_capture.png" width="1000"/> 
 
 ## 실시간 주식 데이터 자동화 분석을 위한 파이프라인 제작 및 배치 
-- 국내 주식의 실시간 체결가를 수집해서 VWAP (거래량 가중 평균 가격)을 계산
+- 국내 주식의 실시간 체결가를 수집해서 VWAP (거래량 가중 평균 가격)을 계산, GCP ElasticSearch 에 적재. Kibana 로 시각화
+- 수집 종목 개수 - 41 개
+- 수집 데이터 크기: 1시간에 약 700MB
 - 장 시작시간을 고려하여 평일 08:50분 시작, 16:00에 종료
 - 안정성과 다른 추가 분석을 위한 원본 데이터 별도 수집
 ### 데이터 수집 및 적재(한국투자증권 api --> kafka, MongoDB)
@@ -23,7 +25,9 @@
 ### 분석 결과 리포트 적재(Spark --> GCP ElasticSearch)
 1. 집계한 결과는 GCP ElasticSearch 에 저장됩니다.
 ### 시각화(Kibana)
+- 각 항목으로 구분
 <img src="/capture/6.visualization/dashboards.png" width="1000"/>
+<img src="/capture/6.visualization/dashboards2.png" width="1000"/>
 
 ## 배치 작업(AirFlow)
 <img src="/capture/4.quality_test_mongo/test_mongo_log.png" width="1000"/>
