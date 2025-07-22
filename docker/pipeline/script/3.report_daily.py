@@ -2,7 +2,8 @@
 import os
 from datetime import datetime
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, date_format, when, current_timestamp, explode, length, to_date, current_date, broadcast
+from pyspark.sql.functions import from_json, col, explode, length, to_date, current_date, broadcast, window, to_json, struct, collect_list
+from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, StringType, LongType
 
 """
@@ -31,6 +32,7 @@ def main():
 
     KAFKA_BROKER = os.getenv('KAFKA_BROKER_INTERNAL')
     TRADE_TOPIC = os.getenv('KAFKA_TOPICS')
+    ANOMALY_TOPIC = os.getenv('ANOMALY_TOPIC')
 
     ES_ENDPOINT_URL = os.getenv('ES_ENDPOINT')
     if ES_ENDPOINT_URL and "://" in ES_ENDPOINT_URL:
@@ -59,6 +61,7 @@ def main():
     # 데이터 스키마 정의 (kafka의 H0STCNT0 JSON 파싱용)
     trade_schema = StructType([
         StructField("stck_prpr", StringType()),
+        StructField("cntg_vol", StringType()),
         StructField("acml_vol", StringType()),
         StructField("acml_tr_pbmn", StringType()),
         StructField("cttr", StringType()),
@@ -80,9 +83,11 @@ def main():
     # 5. kafka 메시지를 파싱하여 데이터프레임으로 변환
     parsed_df = today_df.select(
         # col("value").cast("string"), # 원본
+        col("timestamp"),
         from_json(col("value").cast("string"), trade_schema).alias("data"), 
         col("key").cast("string").alias("stock_code"),
-        length(col("value")).alias("message_size_bytes")
+        length(col("value")).alias("message_size_bytes"),
+        col("value").cast("string").alias("original_message") # 원본 카프카 메세지
     )
 
     # 6. sector 와 조인
@@ -92,46 +97,91 @@ def main():
         "left"
     ).select(parsed_df["*"], broadcasted_sector_df["sector"], broadcasted_sector_df["name"])
 
-    # 7.지표 계산, 컬럼 이름을 부여
-    result_df = (joined_df
-        .select(
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------
+    # 7. 데이터 계산 부분
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------
+
+    ## 7-1.일반 VWAP 데이터 계산
+    window_agg_df = joined_df \
+        .withWatermark("timestamp", "1 minute") \
+        .groupBy(
+            window("timestamp", "30 seconds"),
             col("stock_code"),
             col("sector"),
-            col("name"),
-            col("message_size_bytes"),
-            col("data.acml_vol").cast(LongType()).alias("cumulative_volume"),
-            col("data.acml_tr_pbmn").cast(LongType()).alias("cumulative_value"),
-            col("data.cttr").cast(LongType()).alias("trade_strength"),
-            col("data.total_askp_rsqn").cast(LongType()).alias("total_ask_qty"),
-            col("data.total_bidp_rsqn").cast(LongType()).alias("total_bid_qty"),
-        ).filter(col("cumulative_volume").isNotNull() & (col("cumulative_volume") > 0)) # 0으로 나누는 오류를 방지
-        .withColumn("vwap", col("cumulative_value") / col("cumulative_volume")) # VWAP (거래량 가중 평균 가격)
-        .withColumn("buy_sell_pressure", when(col("total_ask_qty") > 0, col("total_bid_qty") / col("total_ask_qty")).otherwise(0)) # 매수/매도 압력: total_ask_qty가 0보다 클 때만 계산하고, 아니면 0을 반환)
-        # .withColumn("update_time", date_format(current_timestamp(), "yyyy-MM-dd'T'HH:mm:ss"))
-        .withColumn("update_time", date_format(current_timestamp(), "yyyy-MM-dd'T'HH:mm:ssXXX")) # 'T':날짜와 시간을 구분하기 위한 문자, "XXX":UTC 시간으로부터 한국 시간과의 차이를 나타낸다 Elasticsearch 에서 한국 시간을 인지하기 위한 옵션
+            col("name")
+        ).agg(
+            F.sum(F.col("data.stck_prpr").cast(LongType()) * F.col("data.cntg_vol").cast(LongType())).alias("sum_price_volume"),
+            F.sum(F.col("data.cntg_vol")).cast(LongType()).alias("total_volume"),
+            F.min(F.col("data.stck_prpr")).cast(LongType()).alias("min_price"),
+            F.max(F.col("data.stck_prpr")).cast(LongType()).alias("max_price"),
+            F.avg(F.col("data.stck_prpr")).cast(LongType()).alias("avg_price"),
+            collect_list("original_message").alias("raw_messages")
+        )
+    
+    window_agg_df = window_agg_df \
+        .withColumn("vwap", F.col("sum_price_volume") / F.col("total_volume")) \
+        .withColumn("update_time", F.date_format(F.col("window.start"), "yyyy-MM-dd'T'HH:mm:ssXXX")) # 'T':날짜와 시간을 구분하기 위한 문자, "XXX":UTC 시간으로부터 한국 시간과의 차이를 나타낸다 Elasticsearch 에서 한국 시간을 인지하기 위한 옵션
+    
+    ## 7-2.일반 VWAP 데이터 계산 후 필요한 컬럼만 최종 select
+    vwap_agg_df = window_agg_df.select("update_time", "stock_code", "sector", "name", "vwap", "total_volume")
+
+    ## 7-3.이상치 급등락 데이터 - 일반 VWAP 데이터에서 필터
+    anomaly_df = window_agg_df.filter(
+        ((col("max_price") - col("min_price")) / col("min_price") >= 0.05) &
+        ((col("max_price") - col("avg_price")) / col("avg_price") >= 0.03)
+    ).select("update_time", "stock_code", "sector", "name", "min_price", "avg_price", "max_price", "total_volume", "raw_messages")
+
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------
+    # 8. 데이터 적재
+    # ---------------------------------------------------------------------------------------------------------------------------------------------------
+
+    ## 8-1.공통 옵션
+    es_common_options = {
+        "es.nodes": ES_HOST, "es.port": ES_PORT, "es.net.ssl": "true",
+        "es.net.http.auth.user": ES_USERNAME, "es.net.http.auth.pass": ES_PASSWORD,
+        "es.nodes.wan.only": "true", "es.nodes.discovery": "false",
+        "es.mapping.properties.name": "keyword", "es.mapping.properties.update_time": "date"
+    }
+
+    ## 8-2.일반 VWAP 데이터 ElasticSearch 전송
+    es_resource_agg = f"stock_report_agg_{datetime.now().strftime('%Y-%m-%d')}"
+    query_agg = (vwap_agg_df.writeStream
+            .outputMode("append")
+            .format("org.elasticsearch.spark.sql")
+            .options(**es_common_options)
+            .option("es.resource", es_resource_agg)
+            .option("checkpointLocation", "./checkpoints/es_report_agg")
+            .start())
+    
+    ## 8-3.이상치 데이터 ElasticSearch 전송
+    es_resource_anomalies = f"stock_report_anomal_{datetime.now().strftime('%Y-%m-%d')}"
+    query_anomal = (anomaly_df.writeStream
+            .outputMode("append")
+            .format("org.elasticsearch.spark.sql")
+            .options(**es_common_options)
+            .option("es.resource", es_resource_anomalies)
+            .option("checkpointLocation", "./checkpoints/es_report_anomalies")
+            .start())
+
+    ## 8-3.이상치 데이터 원본 메세지와 함께 kafka 전송
+    kafka_anomaly_df = anomaly_df.select(
+        col("stock_code").alias("key"),
+        to_json(struct(
+            "update_time","stock_code", "sector", "name", 
+            "min_price", "avg_price", "max_price", "total_volume", "raw_messages"
+        )).alias("value")
     )
 
-    # 8. ElasticSearch 적재
-    es_resource = f"stock_report_{datetime.now().strftime('%Y-%m-%d')}"
-    query = (result_df.writeStream
-            .outputMode("append")
-            # .format("console")                     # 데이터프레임 콘솔 출력
-            .format("org.elasticsearch.spark.sql") # 데이터프레임 ElasticSearch 로 보냄
-            .option("es.nodes", ES_HOST)
-            .option("es.port", ES_PORT)
-            .option("es.net.ssl", "true")
-            .option("es.net.http.auth.user", ES_USERNAME)
-            .option("es.net.http.auth.pass", ES_PASSWORD)
-            .option("es.nodes.wan.only", "true")
-            .option("es.nodes.discovery", "false")
-            .option("es.resource", es_resource)
-            .option("es.mapping.properties.sector", "keyword")
-            .option("es.mapping.properties.name", "keyword")
-            .option("es.mapping.properties.update_time", "date")
-            .option("checkpointLocation", "./checkpoints/es_report")
-            .start())
-    print(f"스트리밍 쿼리 시작. 결과를 GCP ElasticSearch 으로 전송합니다.")
-    query.awaitTermination() # 스트리밍이 종료될때까지 계속 실행
+    query_anomalies_to_kafka = (kafka_anomaly_df.writeStream
+        .outputMode("append")
+        .format("kafka")
+        .option("kafka.bootstrap.servers", KAFKA_BROKER)
+        .option("topic", ANOMALY_TOPIC)
+        .option("checkpointLocation", "./checkpoints/kafka_report_anomalies")
+        .start())
+
+    print("스트리밍 쿼리 시작. VWAP 데이터는 ES로, 이상치 데이터는 Kafka로 전송합니다.")
+    spark.streams.awaitAnyTermination()
 
 if __name__ == "__main__":
     main()
