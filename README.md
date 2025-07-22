@@ -30,11 +30,11 @@
 <img src="/capture/3.report_daily/anomal_test2.png" width="1000"/>
 ### 시각화(Kibana)
 - 각 항목으로 구분
-<img src="/capture/6.visualization/dashboards.png" width="1000"/>
-<img src="/capture/6.visualization/dashboards2.png" width="1000"/>
+<img src="/capture/5.visualization/dashboards.png" width="1000"/>
+<img src="/capture/5.visualization/dashboards2.png" width="1000"/>
 
 ## 배치 작업(AirFlow)
-<img src="/capture/5.data_monitoring/email_report.png" width="1000"/>
+<img src="/capture/4.data_monitoring/email_report.png" width="1000"/>
 
 1. 매주 평일 오전 08시 50분에 전체 배치 시작, 오후 04시 00분에 배치가 종료됩니다.
 2. 5분마다 데이터가 제대로 적재되고있는지 확인하고 만약 5분 이상 적재되지 않으면 알람 이메일을 보냅니다.
