@@ -3,7 +3,7 @@
 
 ## 실시간 주식 데이터 자동화 분석을 위한 파이프라인 제작 및 배치 
 - 국내 주식의 실시간 체결가를 수집해서 VWAP (거래량 가중 평균 가격)을 계산, GCP ElasticSearch 에 적재, Kibana 로 시각화
-- VWAP 를 통해 각 종목의 가격 변동을 실시간 모니터링
+- VWAP 와 총 체결 거래량을 통해 각 종목의 가격 변동을 실시간 모니터링
 - 수집 종목 개수 - 41 개
 - 수집 데이터 크기: 1시간에 약 700MB
 - 장 시작시간을 고려하여 평일 08:50분 시작, 16:00에 종료
@@ -22,14 +22,15 @@
 ### 데이터 추출 and 가공(kafka --> Spark)
 1. 카프카의 실시간 체결가 토픽을 스파크 스트리밍을 이용해서 구독합니다.
 2. 오늘 날짜로 필터링해서 실시간으로 분석합니다.
-### 분석 결과 리포트 적재(Spark --> GCP ElasticSearch, Kafka)
-1. 집계한 결과는 GCP ElasticSearch 에 저장됩니다.
-2. 임의의 이상치 기준을 설정, 기준에서 벗어나는 데이터는 카프카의 별도 토픽에 재적재 합니다.
+3. 임의의 이상치 기준을 설정, 기준에서 벗어나는 데이터는 카프카의 별도 토픽에 재적재 합니다.
 <img src="/capture/3.report_daily/anomal_test1.png" width="1000"/>
 <img src="/capture/3.report_daily/anomal_test2.png" width="1000"/>
 
+### 분석 결과 리포트 적재(Spark --> GCP ElasticSearch, Kafka)
+1. 집계한 결과는 GCP ElasticSearch 에 저장됩니다.
+
 ### 시각화(Kibana)
-- 각 항목으로 구분
+- 각 종목 별 분야명으로 구분
 <img src="/capture/5.visualization/dashboards.png" width="1000"/>
 <img src="/capture/5.visualization/dashboards2.png" width="1000"/>
 
